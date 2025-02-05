@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Resources Information</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+    <div class="container py-5">
+        <h1 class="mb-4">AWS 資源資訊</h1>
+        
+        <!-- 文件上傳區域 -->
+        <div class="mb-4">
+            <input type="file" id="jsonFile" class="form-control" accept=".json">
+        </div>
+
+        <!-- 層級式篩選區域 -->
+        <div class="mb-4">
+            <div class="row g-3">
+                <div class="col-md-3">
+                    <select id="regionFilter" class="form-select">
+                        <option value="">選擇區域</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select id="serviceFilter" class="form-select">
+                        <option value="">選擇服務</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select id="resourceTypeFilter" class="form-select">
+                        <option value="">選擇資源類型</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <select id="itemsPerPage" class="form-select">
+                        <option value="5">每頁 5 項</option>
+                        <option value="10" selected>每頁 10 項</option>
+                        <option value="20">每頁 20 項</option>
+                        <option value="50">每頁 50 項</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- 搜尋框 -->
+        <div class="mb-4">
+            <input type="text" id="searchInput" class="form-control" placeholder="搜索資源...">
+        </div>
+
+        <!-- 資源統計資訊 -->
+        <div id="statsInfo" class="alert alert-info mb-4" style="display: none;">
+            正在顯示 <span id="totalItems">0</span> 個資源中的第 
+            <span id="startItem">0</span> 到第 <span id="endItem">0</span> 個
+        </div>
+
+        <!-- 資源卡片容器 -->
+        <div id="resourceContainer"></div>
+
+        <!-- 分頁控制 -->
+        <nav id="pagination" class="mt-4" aria-label="Resource pagination" style="display: none;">
+            <ul class="pagination justify-content-center">
+                <li class="page-item">
+                    <button class="page-link" id="prevPage">上一頁</button>
+                </li>
+                <li class="page-item">
+                    <span class="page-link" id="currentPage">第 1 頁</span>
+                </li>
+                <li class="page-item">
+                    <button class="page-link" id="nextPage">下一頁</button>
+                </li>
+            </ul>
+        </nav>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let allResources = [];
+        let currentPage = 1;
+        let filteredResources = [];
+
+        // 創建資源卡片的HTML
+        function createResourceCard(data) {
+            return `
+                <div class="card shadow-sm mb-4">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="card-title mb-0">${data.AWS_Service} - ${data.AWS_ResourceType}</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="fw-bold">AWS 帳戶 ID:</label>
+                                    <p class="mb-2">${data.AWS_AccountID}</p>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="fw-bold">區域:</label>
+                                    <p class="mb-2">${data.AWS_Region}</p>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="fw-bold">服務:</label>
+                                    <p class="mb-2">${data.AWS_Service}</p>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="mb-3">
+                                    <label class="fw-bold">資源類型:</label>
+                                    <p class="mb-2">${data.AWS_ResourceType}</p>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="fw-bold">資源 ID:</label>
+                                    <p class="mb-2">${data.AWS_ResourceID}</p>
+                                </div>
+                                <div class="mb-3">
+                                    <label class="fw-bold">資源 ARN:</label>
+                                    <p class="mb-2 text-break">${data.AWS_ResourceARN}</p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-4">
+                            <h6 class="fw-bold">標籤:</h6>
+                            <div class="table-responsive">
+                                <table class="table table-bordered table-hover">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Key</th>
+                                            <th>Value</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${(data.AWS_Tags || []).map(tag => `
+                                            <tr>
+                                                <td>${tag.Key || ''}</td>
+                                                <td>${tag.Value || ''}</td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 更新篩選選項
+        function updateFilterOptions() {
+            const regionFilter = document.getElementById('regionFilter');
+            const serviceFilter = document.getElementById('serviceFilter');
+            const resourceTypeFilter = document.getElementById('resourceTypeFilter');
+
+            // 取得選定的值
+            const selectedRegion = regionFilter.value;
+            const selectedService = serviceFilter.value;
+
+            // 更新區域選項
+            const regions = [...new Set(allResources.map(r => r.AWS_Region))].sort();
+            regionFilter.innerHTML = '<option value="">選擇區域</option>' + 
+                regions.map(region => `<option value="${region}" ${region === selectedRegion ? 'selected' : ''}>${region}</option>`).join('');
+
+            // 根據選定的區域篩選服務
+            let filteredByRegion = allResources;
+            if (selectedRegion) {
+                filteredByRegion = allResources.filter(r => r.AWS_Region === selectedRegion);
+            }
+
+            const services = [...new Set(filteredByRegion.map(r => r.AWS_Service))].sort();
+            serviceFilter.innerHTML = '<option value="">選擇服務</option>' + 
+                services.map(service => `<option value="${service}" ${service === selectedService ? 'selected' : ''}>${service}</option>`).join('');
+
+            // 根據選定的區域和服務篩選資源類型
+            let filteredByService = filteredByRegion;
+            if (selectedService) {
+                filteredByService = filteredByRegion.filter(r => r.AWS_Service === selectedService);
+            }
+
+            const resourceTypes = [...new Set(filteredByService.map(r => r.AWS_ResourceType))].sort();
+            resourceTypeFilter.innerHTML = '<option value="">選擇資源類型</option>' + 
+                resourceTypes.map(type => `<option value="${type}">${type}</option>`).join('');
+        }
+
+        // 應用所有篩選條件
+        function applyFilters() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const selectedRegion = document.getElementById('regionFilter').value;
+            const selectedService = document.getElementById('serviceFilter').value;
+            const selectedResourceType = document.getElementById('resourceTypeFilter').value;
+
+            filteredResources = allResources.filter(resource => {
+                const matchesRegion = !selectedRegion || resource.AWS_Region === selectedRegion;
+                const matchesService = !selectedService || resource.AWS_Service === selectedService;
+                const matchesResourceType = !selectedResourceType || resource.AWS_ResourceType === selectedResourceType;
+                const matchesSearch = !searchTerm || 
+                    Object.values(resource).some(value => 
+                        typeof value === 'string' && value.toLowerCase().includes(searchTerm)
+                    );
+                
+                return matchesRegion && matchesService && matchesResourceType && matchesSearch;
+            });
+
+            currentPage = 1;
+            displayResources();
+        }
+
+        // 更新分頁顯示
+        function updatePagination() {
+            const itemsPerPage = parseInt(document.getElementById('itemsPerPage').value);
+            const totalPages = Math.ceil(filteredResources.length / itemsPerPage);
+            
+            document.getElementById('prevPage').disabled = currentPage === 1;
+            document.getElementById('nextPage').disabled = currentPage === totalPages;
+            document.getElementById('currentPage').textContent = `第 ${currentPage} 頁 / 共 ${totalPages} 頁`;
+
+            const startItem = (currentPage - 1) * itemsPerPage + 1;
+            const endItem = Math.min(currentPage * itemsPerPage, filteredResources.length);
+            
+            document.getElementById('totalItems').textContent = filteredResources.length;
+            document.getElementById('startItem').textContent = startItem;
+            document.getElementById('endItem').textContent = endItem;
+            document.getElementById('statsInfo').style.display = 'block';
+        }
+
+        // 顯示當前頁的資源
+        function displayResources() {
+            const container = document.getElementById('resourceContainer');
+            const itemsPerPage = parseInt(document.getElementById('itemsPerPage').value);
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const endIndex = startIndex + itemsPerPage;
+            
+            container.innerHTML = filteredResources
+                .slice(startIndex, endIndex)
+                .map(createResourceCard)
+                .join('');
+
+            updatePagination();
+            document.getElementById('pagination').style.display = filteredResources.length > 0 ? 'block' : 'none';
+        }
+
+        // 事件監聽器
+        document.getElementById('jsonFile').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    try {
+                        const jsonData = JSON.parse(e.target.result);
+                        allResources = Array.isArray(jsonData) ? jsonData : [jsonData];
+                        filteredResources = [...allResources];
+                        updateFilterOptions();
+                        currentPage = 1;
+                        displayResources();
+                    } catch (error) {
+                        alert('JSON 解析錯誤: ' + error);
+                    }
+                };
+                reader.readAsText(file);
+            }
+        });
+
+        // 分頁控制
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (currentPage > 1) {
+                currentPage--;
+                displayResources();
+            }
+        });
+
+        document.getElementById('nextPage').addEventListener('click', () => {
+            const itemsPerPage = parseInt(document.getElementById('itemsPerPage').value);
+            const totalPages = Math.ceil(filteredResources.length / itemsPerPage);
+            if (currentPage < totalPages) {
+                currentPage++;
+                displayResources();
+            }
+        });
+
+        // 篩選控制
+        document.getElementById('regionFilter').addEventListener('change', () => {
+            updateFilterOptions();
+            applyFilters();
+        });
+
+        document.getElementById('serviceFilter').addEventListener('change', () => {
+            updateFilterOptions();
+            applyFilters();
+        });
+
+        document.getElementById('resourceTypeFilter').addEventListener('change', applyFilters);
+        document.getElementById('searchInput').addEventListener('input', applyFilters);
+        document.getElementById('itemsPerPage').addEventListener('change', () => {
+            currentPage = 1;
+            displayResources();
+        });
+
+        // 支援直接貼上JSON
+        document.addEventListener('paste', function(e) {
+            try {
+                const text = e.clipboardData.getData('text');
+                const jsonData = JSON.parse(text);
+                allResources = Array.isArray(jsonData) ? jsonData : [jsonData];
+                filteredResources = [...allResources];
+                updateFilterOptions();
+                currentPage = 1;
+                displayResources();
+            } catch (error) {
+                console.log('Not a valid JSON paste');
+            }
+        });
+    </script>
+</body>
+</html>
