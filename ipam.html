@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AWS Public IP 分析</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.js"></script>
+</head>
+<body class="bg-light">
+    <div class="container py-4">
+        <h2 class="mb-4">AWS Public IP 分析儀表板</h2>
+        
+        <!-- 檔案上傳與摘要資訊 -->
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">上傳資料</h5>
+                        <input type="file" id="csvFile" class="form-control" accept=".csv">
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-8">
+                <div class="card">
+                    <div class="card-body">
+                        <h5 class="card-title">資料摘要</h5>
+                        <div class="row" id="summary">
+                            <div class="col-md-4">
+                                <div class="border rounded p-2 text-center">
+                                    <h6>總 IP 數量</h6>
+                                    <span id="totalIPs" class="h4">0</span>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="border rounded p-2 text-center">
+                                    <h6>服務類型數</h6>
+                                    <span id="serviceTypes" class="h4">0</span>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="border rounded p-2 text-center">
+                                    <h6>IP 類型數</h6>
+                                    <span id="addressTypes" class="h4">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 圖表 -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">服務分布</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="serviceChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="card-title mb-0">IP 類型分布</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="addressTypeChart" height="250"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 篩選器 -->
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">服務類型</label>
+                        <select id="serviceFilter" class="form-select">
+                            <option value="">全部服務</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">IP 類型</label>
+                        <select id="addressTypeFilter" class="form-select">
+                            <option value="">全部類型</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">搜尋</label>
+                        <input type="text" id="searchInput" class="form-control" placeholder="搜尋 IP、介面 ID 等...">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">每頁顯示</label>
+                        <select id="itemsPerPage" class="form-select">
+                            <option value="5">5 筆</option>
+                            <option value="10" selected>10 筆</option>
+                            <option value="20">20 筆</option>
+                            <option value="50">50 筆</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 資料表格 -->
+        <div class="card mb-4">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">IP 詳細資訊</h5>
+                <span id="tableInfo" class="text-muted small">顯示 0 筆資料</span>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>IP 地址</th>
+                                <th>服務</th>
+                                <th>類型</th>
+                                <th>狀態</th>
+                                <th>網路介面 ID</th>
+                                <th>安全群組</th>
+                                <th>更新時間</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dataTable"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- 分頁 -->
+        <nav id="pagination" class="d-flex justify-content-between align-items-center">
+            <div class="pagination-info">
+                總計 <span id="totalRecords">0</span> 筆資料
+            </div>
+            <ul class="pagination mb-0">
+                <li class="page-item">
+                    <button class="page-link" id="prevPage">上一頁</button>
+                </li>
+                <li class="page-item">
+                    <span class="page-link" id="pageInfo">第 1 頁</span>
+                </li>
+                <li class="page-item">
+                    <button class="page-link" id="nextPage">下一頁</button>
+                </li>
+            </ul>
+        </nav>
+    </div>
+
+    <script>
+        let allData = [];
+        let filteredData = [];
+        let currentPage = 1;
+        let charts = { service: null, type: null };
+
+        // 初始化圖表
+        function initCharts() {
+            const chartOptions = {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'right',
+                        labels: {
+                            boxWidth: 12
+                        }
+                    }
+                }
+            };
+
+            charts.service = new Chart('serviceChart', {
+                type: 'pie',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: [
+                            '#4e73df', '#1cc88a', '#36b9cc', '#f6c23e',
+                            '#e74a3b', '#858796', '#5a5c69', '#2c9faf'
+                        ]
+                    }]
+                },
+                options: chartOptions
+            });
+
+            charts.type = new Chart('addressTypeChart', {
+                type: 'pie',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        backgroundColor: ['#4e73df', '#1cc88a', '#36b9cc']
+                    }]
+                },
+                options: chartOptions
+            });
+        }
+
+        // 更新摘要資訊
+        function updateSummary() {
+            const services = new Set(allData.map(item => item.service));
+            const types = new Set(allData.map(item => item.addressType));
+            
+            document.getElementById('totalIPs').textContent = allData.length;
+            document.getElementById('serviceTypes').textContent = services.size;
+            document.getElementById('addressTypes').textContent = types.size;
+        }
+
+        // 更新圖表
+        function updateCharts() {
+            const serviceCount = {};
+            const typeCount = {};
+
+            filteredData.forEach(item => {
+                serviceCount[item.service] = (serviceCount[item.service] || 0) + 1;
+                typeCount[item.addressType] = (typeCount[item.addressType] || 0) + 1;
+            });
+
+            charts.service.data.labels = Object.keys(serviceCount);
+            charts.service.data.datasets[0].data = Object.values(serviceCount);
+            charts.service.update();
+
+            charts.type.data.labels = Object.keys(typeCount);
+            charts.type.data.datasets[0].data = Object.values(typeCount);
+            charts.type.update();
+        }
+
+        // 更新篩選選項
+        function updateFilters() {
+            const services = [...new Set(allData.map(item => item.service))].filter(Boolean).sort();
+            const types = [...new Set(allData.map(item => item.addressType))].filter(Boolean).sort();
+
+            document.getElementById('serviceFilter').innerHTML = 
+                '<option value="">全部服務</option>' +
+                services.map(service => `<option value="${service}">${service}</option>`).join('');
+
+            document.getElementById('addressTypeFilter').innerHTML = 
+                '<option value="">全部類型</option>' +
+                types.map(type => `<option value="${type}">${type}</option>`).join('');
+        }
+
+        // 格式化時間
+        function formatDate(dateStr) {
+            if (!dateStr) return 'N/A';
+            return new Date(dateStr).toLocaleString('zh-TW');
+        }
+
+        // 更新表格
+        function updateTable() {
+            const itemsPerPage = parseInt(document.getElementById('itemsPerPage').value);
+            const startIndex = (currentPage - 1) * itemsPerPage;
+            const pageData = filteredData.slice(startIndex, startIndex + itemsPerPage);
+
+            document.getElementById('dataTable').innerHTML = pageData.map(item => `
+                <tr>
+                    <td>${item.ipAddress}</td>
+                    <td>${item.service || 'N/A'}</td>
+                    <td>${item.addressType || 'N/A'}</td>
+                    <td>${item.associated || 'N/A'}</td>
+                    <td>${item.networkInterfaceId || 'N/A'}</td>
+                    <td class="text-truncate" style="max-width: 200px;" title="${item.securityGroupsDisplay || 'N/A'}">
+                        ${item.securityGroupsDisplay || 'N/A'}
+                    </td>
+                    <td>${formatDate(item.sampleTime)}</td>
+                </tr>
+            `).join('');
+
+            // 更新分頁資訊
+            const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+            document.getElementById('pageInfo').textContent = `第 ${currentPage} / ${totalPages} 頁`;
+            document.getElementById('prevPage').disabled = currentPage === 1;
+            document.getElementById('nextPage').disabled = currentPage === totalPages;
+            document.getElementById('totalRecords').textContent = filteredData.length;
+            document.getElementById('tableInfo').textContent = 
+                `顯示第 ${startIndex + 1} 至 ${Math.min(startIndex + itemsPerPage, filteredData.length)} 筆，共 ${filteredData.length} 筆`;
+        }
+
+        // 篩選資料
+        function filterData() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+            const selectedService = document.getElementById('serviceFilter').value;
+            const selectedType = document.getElementById('addressTypeFilter').value;
+
+            filteredData = allData.filter(item => {
+                const matchesSearch = !searchTerm || 
+                    Object.values(item).some(val => 
+                        val && val.toString().toLowerCase().includes(searchTerm)
+                    );
+                const matchesService = !selectedService || item.service === selectedService;
+                const matchesType = !selectedType || item.addressType === selectedType;
+
+                return matchesSearch && matchesService && matchesType;
+            });
+
+            currentPage = 1;
+            updateCharts();
+            updateTable();
+        }
+
+        // 初始化事件監聽器
+        function initEventListeners() {
+            document.getElementById('csvFile').addEventListener('change', e => {
+                const file = e.target.files[0];
+                if (file) {
+                    Papa.parse(file, {
+                        header: true,
+                        skipEmptyLines: true,
+                        complete: results => {
+                            allData = results.data;
+                            filteredData = [...allData];
+                            updateSummary();
+                            updateFilters();
+                            filterData();
+                        }
+                    });
+                }
+            });
+
+            document.getElementById('serviceFilter').addEventListener('change', filterData);
+            document.getElementById('addressTypeFilter').addEventListener('change', filterData);
+            document.getElementById('searchInput').addEventListener('input', filterData);
+            document.getElementById('itemsPerPage').addEventListener('change', () => {
+                currentPage = 1;
+                updateTable();
+            });
+
+            document.getElementById('prevPage').addEventListener('click', () => {
+                if (currentPage > 1) {
+                    currentPage--;
+                    updateTable();
+                }
+            });
+
+            document.getElementById('nextPage').addEventListener('click', () => {
+                const itemsPerPage = parseInt(document.getElementById('itemsPerPage').value);
+                const totalPages = Math.ceil(filteredData.length / itemsPerPage);
+                if (currentPage < totalPages) {
+                    currentPage++;
+                    updateTable();
+                }
+            });
+        }
+
+        // 初始化應用
+        window.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            initEventListeners();
+        });
+    </script>
+</body>
+</html>
